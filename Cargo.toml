@@ -1,0 +1,8 @@
+[package]
+name = "redis-forge"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytes = "1.12.1"
+mio = { version = "1.2.2", features = ["os-poll", "net"] }

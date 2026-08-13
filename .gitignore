@@ -1,0 +1,9 @@
+/target
+
+# Personal working notes / session logs — not meant to ship with the repo.
+# Explicit filenames rather than *.md so a future README.md isn't caught by accident.
+progress.md
+discussion.md
+things_to_do.md
+TYPE_MAP.md
+path_backup_2026-07-30.txt
