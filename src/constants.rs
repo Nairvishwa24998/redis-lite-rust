@@ -13,6 +13,7 @@ pub const CRLF_BYTES_OFFSET: usize = 2;
 // keeps `data_start + count` and friends nowhere near usize overflow, and avoids blocking
 // forever waiting for bytes a well-behaved client would never send this many of anyway.
 pub const MAX_BULK_STRING_LEN: usize = 512 * 1024 * 1024;
+pub const MAX_BUFFER_SIZE: usize = 1024 * 1024 * 1024; // 1GB
 pub const REDIS_DEFAULT_PORT: u16 = 6379;
 pub const REDIS_DEFAULT_URL: &str = "127.0.0.1:6379";
 pub const BUFFER_PER_POLL_CALL: usize = 1024;

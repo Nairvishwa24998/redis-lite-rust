@@ -1,3 +1,4 @@
+use bytes::BytesMut;
 use mio::event::Source;
 use mio::net::TcpStream;
 use mio::{Events, Interest, Poll, Token};
@@ -8,7 +9,7 @@ use mio::net::TcpListener;
 // mio TcpListener is non blocking by default so we dont need to set it to non blocking
 // Unlike std TcpListener which is blocking by default
 
-use crate::constants::{BUFFER_PER_POLL_CALL, SERVER_TOKEN};
+use crate::constants::{BUFFER_PER_POLL_CALL, MAX_BUFFER_SIZE, SERVER_TOKEN};
 use crate::{
     constants::{REDIS_DEFAULT_PORT, REDIS_DEFAULT_URL},
     error_response::CustomErrorResponse,
@@ -22,7 +23,8 @@ struct Server {
     // Would be the listening socket which would simply keep listening for new connections
     listening_socket: TcpListener,
     token_counter: u64, // Counter to generate unique tokens for each client connection
-    client_connections: HashMap<Token, TcpStream>,
+    // We add BytesMut so we can use that as the client buffer
+    client_connections: HashMap<Token, (TcpStream, BytesMut)>,
 }
 
 // We are gonna assume the server is always gonna run on one the default Redis port 6379 and default url
@@ -49,8 +51,10 @@ impl Server {
     ) -> Result<(), CustomErrorResponse> {
         poll.registry()
             .register(&mut stream, Token(self.token_counter as usize), interest)?;
-        self.client_connections
-            .insert(Token(self.token_counter as usize), stream);
+        self.client_connections.insert(
+            Token(self.token_counter as usize),
+            (stream, BytesMut::with_capacity(MAX_BUFFER_SIZE)),
+        );
         self.token_counter += 1; // Increment the token counter after registering the socket
         Ok(())
     }
@@ -80,10 +84,12 @@ impl Server {
                                     Interest::READABLE.add(Interest::WRITABLE),
                                 )?;
                             }
+                            // No more connections to accept, break the loop and continue with the next event
                             Err(ref e) if e.kind() == WouldBlock => {
                                 // No more connections to accept
                                 break;
                             }
+                            // Some other kind of error has happened, so we should log it and move forward, so one client connection failure doesn't derail all the others
                             Err(e) => {
                                 eprintln!("Error accepting connection: {}", e);
                                 break;
@@ -91,7 +97,9 @@ impl Server {
                         }
                     },
                     // We can potentially read from the client sockets now
-                    _clients => {}
+                    client_token => loop {
+                        () = self.client_connections.get_mut(&client_token)?;
+                    },
                 }
             }
         }
