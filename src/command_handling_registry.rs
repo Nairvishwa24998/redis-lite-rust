@@ -10,7 +10,7 @@ pub fn ping_handler(deserialized_commands: &[RespValue]) -> Result<RespValue, Re
     }
     // return just PONG as simple string
     if command_len == 1 {
-            return Ok(RespValue::SimpleString(Bytes::from_static(PONG_COMMAND)))
+        return Ok(RespValue::SimpleString(Bytes::from_static(PONG_COMMAND)));
     }
     // return PONG as bulk string if there is an argument
     let argument = &deserialized_commands[1];
