@@ -6,21 +6,24 @@ use crate::constants::{
 };
 use crate::resp::RespValue;
 
-
-
-
 // We don't split or freeze here coz it would cause issues recursively in the case of arrays
 // Instead we can freeze at the point where the serializer is called
 pub fn serializer(data: &RespValue, buf: &mut BytesMut) {
     match data {
         // Could be a null bulkstring or null array. Setting to former for convenience
         RespValue::Null => generate_serialized_null(buf),
-        RespValue::Error(err) => generate_serialized_non_bulk_string_result(err, buf, ERROR_FIRST_BYTE),
-        RespValue::SimpleString(s) => generate_serialized_non_bulk_string_result(s, buf, SIMPLE_STRING_FIRST_BYTE),
-        RespValue::BulkString(s) => generate_serialized_bulk_string(s, buf, BULK_STRING_FIRST_BYTE),
-        RespValue::Integer(i) => {
-            generate_serialized_non_bulk_string_result(&i.to_string().into_bytes(), buf, INTEGER_FIRST_BYTE)
+        RespValue::Error(err) => {
+            generate_serialized_non_bulk_string_result(err, buf, ERROR_FIRST_BYTE)
         }
+        RespValue::SimpleString(s) => {
+            generate_serialized_non_bulk_string_result(s, buf, SIMPLE_STRING_FIRST_BYTE)
+        }
+        RespValue::BulkString(s) => generate_serialized_bulk_string(s, buf, BULK_STRING_FIRST_BYTE),
+        RespValue::Integer(i) => generate_serialized_non_bulk_string_result(
+            &i.to_string().into_bytes(),
+            buf,
+            INTEGER_FIRST_BYTE,
+        ),
         RespValue::Array(arr) => {
             let element_count: usize = arr.len();
             // This is the array count bit
@@ -44,7 +47,11 @@ fn generate_serialized_null(buf: &mut BytesMut) {
 }
 
 // Better to accept as [u8]
-fn generate_serialized_non_bulk_string_result(data_bytes: &[u8], buf: &mut BytesMut, first_byte: u8) {
+fn generate_serialized_non_bulk_string_result(
+    data_bytes: &[u8],
+    buf: &mut BytesMut,
+    first_byte: u8,
+) {
     buf.put_u8(first_byte);
     buf.put_slice(data_bytes);
     buf.put_slice(&CRLF);

@@ -6,5 +6,17 @@ mod resp;
 mod serializer;
 mod server;
 mod store;
+mod command_handling_registry;
 
-fn main() {}
+use server::Server;
+
+fn main() {
+    // Start the server
+    if let Ok(mut server) = Server::setup_server_instance() {
+        if let Err(e) = server.commence_connection() {
+            eprintln!("Error starting server: {:?}", e);
+        }
+    } else {
+        eprintln!("Failed to set up server instance.");
+    }
+}

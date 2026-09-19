@@ -1,6 +1,5 @@
 use std::io::Error;
 
-
 #[derive(Debug, PartialEq)]
 pub enum RespErrorResponse {
     IncorrectTypeError,
@@ -11,12 +10,17 @@ pub enum RespErrorResponse {
     Incomplete,
     AttributeMismatchError,
     InvalidRESPType,
+    InvalidRESPCommand,
+    InvalidCommandArguments,
     BulkStringTooLarge,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum CustomErrorType {
     IncorrectPortNumber,
 }
+
+#[derive(Debug, PartialEq)]
 pub struct CustomErrorResponse {
     error_type: CustomErrorType,
     message: String,

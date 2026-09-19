@@ -14,19 +14,6 @@ pub fn deserializer(byte_resp: &[u8]) -> Result<(RespValue, usize), RespErrorRes
     parse_serialized_input(byte_resp, 0)
 }
 
-//Method is not needed
-// // Since its rust we wont have a not type string issue
-// fn preliminary_validate_resp(byte_resp: &[u8], cursor: usize) -> Result<(), RespErrorResponse> {
-//     if byte_resp.is_empty() {
-//         // eprintln!("Input cannot be null or empty!");
-//         return Err(RespErrorResponse::EmptyInput);
-//     } else if byte_resp.len() < RESP_MIN_LEGAL_LENGTH {
-//         // eprintln!("Input is too short to be a valid RESP!");
-//         return Err(RespErrorResponse::GenericError);
-//     }
-//     // Happy Path
-//     Ok(())
-// }
 
 // Returns resultant value and cursor position in a tuple
 fn parse_serialized_input(

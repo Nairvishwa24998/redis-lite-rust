@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 pub struct Store {
     // Fields for the store, such as data structures to hold key-value pairs, etc.
     data_store: HashMap<String, String>,
-    time_store: HashMap<String, u64>,
+    // Can be empty as well, in case key doesn't have timestamp. Timestamps are better stored as Intants than u64 or any other type 
+    time_store: HashMap<String, Instant>, 
 }
 
 impl Store {
@@ -18,11 +19,12 @@ impl Store {
         self.data_store.get(key)
     }
 
-    pub fn get_time_stamp(&self, key: &str) -> Option<&u64> {
+    pub fn get_ttl(&self, key: &str) -> Option<&Instant> {
         self.time_store.get(key)
     }
 
     pub fn set(&mut self, key: String, value: String) {
         self.data_store.insert(key, value);
+
     }
 }
