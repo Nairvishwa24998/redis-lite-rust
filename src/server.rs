@@ -1,21 +1,25 @@
 use bytes::Buf;
 use bytes::BytesMut;
+use core::error;
 use mio::net::TcpStream;
 use mio::{Events, Interest, Poll, Token};
 use std::collections::HashMap;
-use std::io::Error;
 use std::io::ErrorKind::WouldBlock;
 use std::io::Read;
+use std::io::Write;
+use std::str;
 
 use mio::net::TcpListener;
 // prefere this over std TcpListener because mio TcpListener is non blocking by default
 // mio TcpListener is non blocking by default so we dont need to set it to non blocking
 // Unlike std TcpListener which is blocking by default
 
+use crate::client_connection::client_connection;
 use crate::constants::{BUFFER_PER_POLL_CALL, DEFAULT_BUFFER_SIZE, SERVER_TOKEN};
 use crate::deserializer::deserializer;
 use crate::error_response::RespErrorResponse;
 use crate::message_processing::command_handler;
+use crate::serializer::serializer;
 use crate::{
     constants::{REDIS_DEFAULT_PORT, REDIS_DEFAULT_URL},
     error_response::CustomErrorResponse,
@@ -30,7 +34,7 @@ pub struct Server {
     listening_socket: TcpListener,
     token_counter: u64, // Counter to generate unique tokens for each client connection
     // We add BytesMut so we can use that as the client buffer
-    client_connections: HashMap<Token, (TcpStream, BytesMut)>,
+    client_connections: HashMap<Token, client_connection>,
 }
 
 // We are gonna assume the server is always gonna run on one the default Redis port 6379 and default url
@@ -57,13 +61,13 @@ impl Server {
     ) -> Result<(), CustomErrorResponse> {
         poll.registry()
             .register(&mut stream, Token(self.token_counter as usize), interest)?;
+        // self.client_connections.insert(
+        //     Token(self.token_counter as usize),
+        //     (stream, BytesMut::with_capacity(DEFAULT_BUFFER_SIZE)),
+
         self.client_connections.insert(
             Token(self.token_counter as usize),
-            // Note this doesn't initialize the array with that size but it does
-            // ask the OS to set aside the said number of bytes so setting it too high could cause memory issues
-            // 0 is fine coz when it needs more it gets reallocated anyway but keeping it at 4 as a reasonable middle ground so smaller request
-            // don't need any reallocation
-            (stream, BytesMut::with_capacity(DEFAULT_BUFFER_SIZE)),
+            client_connection::new(stream),
         );
         self.token_counter += 1; // Increment the token counter after registering the socket
         Ok(())
@@ -112,7 +116,9 @@ impl Server {
 
     // token implement copies so no ownership issues
     fn manage_client_socket_events(&mut self, poll: &mut Poll, client_token: &Token) {
-        if let Some((stream, buffer)) = self.client_connections.get_mut(client_token) {
+        // if let Some((stream, buffer))
+        if let Some(client_connection) = self.client_connections.get_mut(client_token) {
+            let (buffer, stream) = client_connection.get_recv_buffer_and_tcp_stream();
             // read has limitations only looks at len. Not the capacity. So emtpy buffer
             // with ample capacity would be treated as a full buffer and read would return 0
             // similarly it can potentially overrite existing data in the buffer so
@@ -163,13 +169,17 @@ impl Server {
 
         // Calling again to avoid rust ownership issues and Coz we don't want to call if client disconnected
         self.manage_deserializer_invocation_and_message_processing(poll, client_token);
-        
-
     }
 
-    fn manage_deserializer_invocation_and_message_processing(&mut self, poll: &mut Poll, client_token: &Token) {
+    fn manage_deserializer_invocation_and_message_processing(
+        &mut self,
+        poll: &mut Poll,
+        client_token: &Token,
+    ) {
         // Calling again to avoid rust ownership issues and Coz we don't want to call if client disconnected
-        if let Some((stream, buffer)) = self.client_connections.get_mut(client_token) {
+        if let Some(client_connection) = self.client_connections.get_mut(client_token) {
+            let (buffer, send_buffer, stream) =
+                client_connection.get_recv_and_send_buffer_tcp_stream();
             loop {
                 // Call the deserializer function with the buffer
                 match deserializer(buffer) {
@@ -179,14 +189,20 @@ impl Server {
                         match command_handler(&value) {
                             // We can go into command execution in this branch
                             Ok(response) => {
-                                
-
+                                // we serialize the response, add it to send buffer and send to client
+                                // need loop coz write sends upto capacity and not necessarily all of it
+                                serializer(&response, send_buffer);
+                                loop {
+                                    match stream.write(&send_buffer) {
+                                        Ok(_) => todo!(),
+                                        Err(_) => todo!(),
+                                    }
+                                }
                             }
                             Err(e) => {
                                 eprintln!("Error processing command: {:?}", e);
                             }
                         }
-                        
                     }
                     // If its incomplete we break the loop coz possibly more to come
                     Err(RespErrorResponse::Incomplete) => {

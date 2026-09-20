@@ -7,6 +7,7 @@ mod serializer;
 mod server;
 mod store;
 mod command_handling_registry;
+mod client_connection;
 
 use server::Server;
 

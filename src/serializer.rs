@@ -8,20 +8,20 @@ use crate::resp::RespValue;
 
 // We don't split or freeze here coz it would cause issues recursively in the case of arrays
 // Instead we can freeze at the point where the serializer is called
-pub fn serializer(data: &RespValue, buf: &mut BytesMut) {
+pub fn serializer(data: &RespValue, target_buf: &mut BytesMut) {
     match data {
         // Could be a null bulkstring or null array. Setting to former for convenience
-        RespValue::Null => generate_serialized_null(buf),
+        RespValue::Null => generate_serialized_null(target_buf),
         RespValue::Error(err) => {
-            generate_serialized_non_bulk_string_result(err, buf, ERROR_FIRST_BYTE)
+            generate_serialized_non_bulk_string_result(err, target_buf, ERROR_FIRST_BYTE)
         }
         RespValue::SimpleString(s) => {
-            generate_serialized_non_bulk_string_result(s, buf, SIMPLE_STRING_FIRST_BYTE)
+            generate_serialized_non_bulk_string_result(s, target_buf, SIMPLE_STRING_FIRST_BYTE)
         }
-        RespValue::BulkString(s) => generate_serialized_bulk_string(s, buf, BULK_STRING_FIRST_BYTE),
+        RespValue::BulkString(s) => generate_serialized_bulk_string(s, target_buf, BULK_STRING_FIRST_BYTE),
         RespValue::Integer(i) => generate_serialized_non_bulk_string_result(
             &i.to_string().into_bytes(),
-            buf,
+            target_buf,
             INTEGER_FIRST_BYTE,
         ),
         RespValue::Array(arr) => {
@@ -29,11 +29,11 @@ pub fn serializer(data: &RespValue, buf: &mut BytesMut) {
             // This is the array count bit
             generate_serialized_non_bulk_string_result(
                 &element_count.to_string().into_bytes(),
-                buf,
+                target_buf,
                 ARRAY_FIRST_BYTE,
             );
             for resp_value in arr {
-                serializer(resp_value, buf);
+                serializer(resp_value, target_buf);
             }
         }
     }
