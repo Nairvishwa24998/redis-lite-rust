@@ -61,10 +61,6 @@ impl Server {
     ) -> Result<(), CustomErrorResponse> {
         poll.registry()
             .register(&mut stream, Token(self.token_counter as usize), interest)?;
-        // self.client_connections.insert(
-        //     Token(self.token_counter as usize),
-        //     (stream, BytesMut::with_capacity(DEFAULT_BUFFER_SIZE)),
-
         self.client_connections.insert(
             Token(self.token_counter as usize),
             client_connection::new(stream),
@@ -94,6 +90,9 @@ impl Server {
                 Ok((mut stream, addr)) => {
                     // Handle the new client connection, e.g., register it with the poll instance
                     println!("New client connected: {}", addr);
+                    // we don't default register for both readable and writable coz
+                    // mio is edge triggered and socket becomes writable almost immediately on connection
+                    // send buffer may not have anything at that point, so wastes a run for nothing
                     if let Err(e) =
                         self.register_client_socket_with_poll(poll, stream, Interest::READABLE)
                     {
@@ -176,11 +175,16 @@ impl Server {
         poll: &mut Poll,
         client_token: &Token,
     ) {
+        // To avoid double mutable borrow issues.
+        let mut should_close = false;
+
         // Calling again to avoid rust ownership issues and Coz we don't want to call if client disconnected
         if let Some(client_connection) = self.client_connections.get_mut(client_token) {
             let (buffer, send_buffer, stream) =
                 client_connection.get_recv_and_send_buffer_tcp_stream();
-            loop {
+
+            // labelling to exit outer loop from inside inner one, as against just the inner one if left unnamed
+            'deserialize: loop {
                 // Call the deserializer function with the buffer
                 match deserializer(buffer) {
                     Ok((value, new_cursor)) => {
@@ -193,9 +197,74 @@ impl Server {
                                 // need loop coz write sends upto capacity and not necessarily all of it
                                 serializer(&response, send_buffer);
                                 loop {
+                                    // write path can also return ok(0) if buffer is genuinely empty
+                                    // in which case we can just break the loop so we don't have to check below
+                                    // in stream.write()
+                                    if send_buffer.is_empty() {
+                                        if let Err(e) = poll.registry().reregister(
+                                            stream,
+                                            *client_token,
+                                            Interest::READABLE,
+                                        ) {
+                                            eprintln!(
+                                                "Error while removing writable interest for client {:?}: {:?}",
+                                                client_token, e
+                                            );
+                                        }
+                                        break;
+                                    }
                                     match stream.write(&send_buffer) {
-                                        Ok(_) => todo!(),
-                                        Err(_) => todo!(),
+                                        // two cases - complete write or partial writes
+                                        Ok(n) => {
+                                            // write returning 0 means write attempt failed
+                                            if n == 0 {
+                                                if let Err(e) = poll.registry().deregister(stream) {
+                                                    eprintln!(
+                                                        "Error deregistering client {:?}: {:?}",
+                                                        client_token, e
+                                                    );
+                                                }
+                                                should_close = true;
+                                                break 'deserialize;
+                                            }
+                                            // both remaining ok cases (successful partial and complete writes) we advance the buffer
+                                            send_buffer.advance(n);
+                                        }
+                                        // send buffer is full so would block error/ would actually block if it weren't in non blocking mode
+                                        // we need to signal the kernel to add more space to send buffer
+                                        // coz blocking on write means send buffer is full and only kernel can modify it.
+                                        Err(ref e) if e.kind() == WouldBlock => {
+                                            // Socket is not ready for writing, wait for the next writable event
+                                            eprintln!(
+                                                "Client's send buffer is full {:?}: {:?}",
+                                                client_token, e
+                                            );
+                                            if let Err(e) = poll.registry().reregister(
+                                                stream,
+                                                *client_token,
+                                                Interest::READABLE | Interest::WRITABLE,
+                                            ) {
+                                                eprintln!(
+                                                    "Error while setting interest to writable for client {:?}: {:?}",
+                                                    client_token, e
+                                                );
+                                            }
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "Error writing to client {:?}: {:?}",
+                                                client_token, e
+                                            );
+                                            if let Err(e) = poll.registry().deregister(stream) {
+                                                eprintln!(
+                                                    "Error deregistering client {:?}: {:?}",
+                                                    client_token, e
+                                                );
+                                            }
+                                            should_close = true;
+                                            break 'deserialize;
+                                        }
                                     }
                                 }
                             }
@@ -218,11 +287,15 @@ impl Server {
                             eprintln!("Error deregistering client {:?}: {:?}", client_token, e);
                         }
 
-                        self.client_connections.remove(client_token);
+                        should_close = true;
                         break;
                     }
                 }
             }
+        }
+
+        if should_close {
+            self.client_connections.remove(client_token);
         }
     }
 
