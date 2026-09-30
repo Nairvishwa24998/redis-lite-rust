@@ -7,7 +7,7 @@ pub struct client_connection {
     tcp_stream: TcpStream,
     rec_buffer: BytesMut,
     send_buffer: BytesMut,
-    interest: Interest
+    interest: Interest,
 }
 
 impl client_connection {
@@ -20,7 +20,7 @@ impl client_connection {
             // don't need any reallocation
             rec_buffer: BytesMut::with_capacity(DEFAULT_BUFFER_SIZE),
             send_buffer: BytesMut::with_capacity(DEFAULT_BUFFER_SIZE),
-            interest: interest
+            interest: interest,
         }
     }
 
@@ -56,7 +56,6 @@ impl client_connection {
         self.interest = interest;
     }
 
-    
     // just to prevent borrow checker issues when we need both of them at the same time
     pub fn get_recv_buffer_and_tcp_stream(&mut self) -> (&mut BytesMut, &mut TcpStream) {
         (&mut self.rec_buffer, &mut self.tcp_stream)
@@ -64,6 +63,11 @@ impl client_connection {
 
     // just to prevent borrow checker issues when we need all three of them at the same time
     pub fn get_all(&mut self) -> (&mut BytesMut, &mut BytesMut, &mut TcpStream, &mut Interest) {
-        (&mut self.rec_buffer, &mut self.send_buffer, &mut self.tcp_stream, &mut self.interest)
+        (
+            &mut self.rec_buffer,
+            &mut self.send_buffer,
+            &mut self.tcp_stream,
+            &mut self.interest,
+        )
     }
 }
