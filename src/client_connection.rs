@@ -1,5 +1,5 @@
 use bytes::BytesMut;
-use mio::net::TcpStream;
+use mio::{Interest, net::TcpStream};
 
 use crate::constants::DEFAULT_BUFFER_SIZE;
 
@@ -7,10 +7,11 @@ pub struct client_connection {
     tcp_stream: TcpStream,
     rec_buffer: BytesMut,
     send_buffer: BytesMut,
+    interest: Interest
 }
 
 impl client_connection {
-    pub fn new(tcp_stream: TcpStream) -> Self {
+    pub fn new(tcp_stream: TcpStream, interest: Interest) -> Self {
         client_connection {
             tcp_stream,
             // Note this doesn't initialize the array with that size but it does
@@ -19,19 +20,20 @@ impl client_connection {
             // don't need any reallocation
             rec_buffer: BytesMut::with_capacity(DEFAULT_BUFFER_SIZE),
             send_buffer: BytesMut::with_capacity(DEFAULT_BUFFER_SIZE),
+            interest: interest
         }
     }
 
-    pub fn get_tcp_stream(&mut self) -> &mut TcpStream {
-        &mut self.tcp_stream
+    pub fn get_tcp_stream(&self) -> &TcpStream {
+        &self.tcp_stream
     }
 
-    pub fn get_rec_buffer(&mut self) -> &mut BytesMut {
-        &mut self.rec_buffer
+    pub fn get_rec_buffer(&self) -> &BytesMut {
+        &self.rec_buffer
     }
 
-    pub fn get_send_buffer(&mut self) -> &mut BytesMut {
-        &mut self.send_buffer
+    pub fn get_send_buffer(&self) -> &BytesMut {
+        &self.send_buffer
     }
 
     pub fn set_send_buffer(&mut self, new_send_buffer: BytesMut) {
@@ -46,13 +48,22 @@ impl client_connection {
         self.tcp_stream = new_tcp_stream;
     }
 
+    pub fn get_interest(&self) -> &Interest {
+        &self.interest
+    }
+
+    pub fn set_interest(&mut self, interest: Interest) {
+        self.interest = interest;
+    }
+
+    
     // just to prevent borrow checker issues when we need both of them at the same time
     pub fn get_recv_buffer_and_tcp_stream(&mut self) -> (&mut BytesMut, &mut TcpStream) {
         (&mut self.rec_buffer, &mut self.tcp_stream)
     }
 
     // just to prevent borrow checker issues when we need all three of them at the same time
-    pub fn get_recv_and_send_buffer_tcp_stream(&mut self) -> (&mut BytesMut, &mut BytesMut, &mut TcpStream) {
-        (&mut self.rec_buffer, &mut self.send_buffer, &mut self.tcp_stream)
+    pub fn get_all(&mut self) -> (&mut BytesMut, &mut BytesMut, &mut TcpStream, &mut Interest) {
+        (&mut self.rec_buffer, &mut self.send_buffer, &mut self.tcp_stream, &mut self.interest)
     }
 }
