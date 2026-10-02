@@ -24,10 +24,6 @@ impl client_connection {
         }
     }
 
-    pub fn get_tcp_stream(&self) -> &TcpStream {
-        &self.tcp_stream
-    }
-
     pub fn get_rec_buffer(&self) -> &BytesMut {
         &self.rec_buffer
     }
@@ -42,6 +38,10 @@ impl client_connection {
 
     pub fn set_rec_buffer(&mut self, new_rec_buffer: BytesMut) {
         self.rec_buffer = new_rec_buffer;
+    }
+
+    pub fn get_tcp_stream_mut(&mut self) -> &mut TcpStream {
+        &mut self.tcp_stream
     }
 
     pub fn set_tcp_stream(&mut self, new_tcp_stream: TcpStream) {
@@ -61,7 +61,11 @@ impl client_connection {
         (&mut self.rec_buffer, &mut self.tcp_stream)
     }
 
-    // just to prevent borrow checker issues when we need all three of them at the same time
+    pub fn get_rcv_and_send_buffer(&mut self) -> (&mut BytesMut, &mut BytesMut) {
+        (&mut self.rec_buffer, &mut self.send_buffer)
+    }
+
+    // just to prevent borrow checker issues when we need all four of them at the same time
     pub fn get_all(&mut self) -> (&mut BytesMut, &mut BytesMut, &mut TcpStream, &mut Interest) {
         (
             &mut self.rec_buffer,

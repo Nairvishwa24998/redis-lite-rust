@@ -15,6 +15,7 @@ use mio::net::TcpListener;
 // Unlike std TcpListener which is blocking by default
 
 use crate::client_connection::client_connection;
+use crate::constants::MAX_BUFFER_SIZE;
 use crate::constants::{BUFFER_PER_POLL_CALL, DEFAULT_BUFFER_SIZE, SERVER_TOKEN};
 use crate::deserializer::deserializer;
 use crate::error_response::RespErrorResponse;
@@ -115,7 +116,7 @@ impl Server {
 
     fn manage_client_socket_readable_events(&mut self, poll: &mut Poll, client_token: &Token) {
         if let Some(client_connection) = self.client_connections.get_mut(client_token) {
-            let (buffer, stream) = client_connection.get_recv_buffer_and_tcp_stream();
+            let (recv_buffer, stream) = client_connection.get_recv_buffer_and_tcp_stream();
             // read has limitations only looks at len. Not the capacity. So emtpy buffer
             // with ample capacity would be treated as a full buffer and read would return 0
             // similarly it can potentially overrite existing data in the buffer so
@@ -128,18 +129,22 @@ impl Server {
                     // reached EOF or client closed connection
                     Ok(0) => {
                         println!("Client disconnected: {:?}", client_token);
-                        // Not super mandatory, but good practice to degister manually
-                        if let Err(e) = poll.registry().deregister(stream) {
-                            eprintln!("Error deregistering client {:?}: {:?}", client_token, e);
-                        }
-                        self.client_connections.remove(client_token);
+                        self.disconnect_client_helper(poll, client_token);
                         // return at the point of deregister for early exit and prevent flow into deserialization
                         return;
                     }
                     // Successfully read n bytes
                     Ok(n) => {
+                        if n + recv_buffer.len() > MAX_BUFFER_SIZE {
+                            eprintln!(
+                                "Client {:?} exceeded maximum buffer size. Disconnecting.",
+                                client_token
+                            );
+                            self.disconnect_client_helper(poll, client_token);
+                            return;
+                        }
                         // Append the read data to the buffer
-                        buffer.extend_from_slice(&temp_buffer[..n]);
+                        recv_buffer.extend_from_slice(&temp_buffer[..n]);
                         println!(
                             "Read {} bytes from client {:?}: {:?}",
                             n,
@@ -155,16 +160,15 @@ impl Server {
                     // Any other kind of error
                     Err(e) => {
                         eprintln!("Error reading from client {:?}: {:?}", client_token, e);
-                        if let Err(e) = poll.registry().deregister(stream) {
-                            eprintln!("Error deregistering client {:?}: {:?}", client_token, e);
-                        }
-                        self.client_connections.remove(client_token);
+                        self.disconnect_client_helper(poll, client_token);
                         return;
                     }
                 }
             }
             // Calling again to avoid rust ownership issues and Coz we don't want to call if client disconnected
             self.manage_deserializer_invocation_and_message_processing(poll, client_token);
+            // if there is some data in the send buffer, we can send it directly
+            // can also set to writable and let next poll handle but wasted system calls
             self.flush_send_buffer(poll, client_token);
         }
     }
@@ -207,14 +211,11 @@ impl Server {
                     Ok(n) => {
                         // write returning 0 means write attempt failed
                         if n == 0 {
-                            if let Err(e) = poll.registry().deregister(stream) {
-                                eprintln!("Error deregistering client {:?}: {:?}", client_token, e);
-                            }
+                            self.disconnect_client_helper(poll, client_token);
                             // deregister failure is not dangerous.
                             // System would handle it, when we remove the corresponding client_connction, the associated stream also loses ownership
                             // in such case, Rust autotamtically closes and the OS would deregister the client
                             // so we can remove it even if our deregistry fails
-                            self.client_connections.remove(client_token);
                             return;
                         }
                         // both remaining ok cases (successful partial and complete writes) we advance the buffer
@@ -245,10 +246,7 @@ impl Server {
                     }
                     Err(e) => {
                         eprintln!("Error writing to client {:?}: {:?}", client_token, e);
-                        if let Err(e) = poll.registry().deregister(stream) {
-                            eprintln!("Error deregistering client {:?}: {:?}", client_token, e);
-                        }
-                        self.client_connections.remove(client_token);
+                        self.disconnect_client_helper(poll, client_token);
                         return;
                     }
                 }
@@ -263,7 +261,7 @@ impl Server {
     ) {
         // Calling again to avoid rust ownership issues and Coz we don't want to call if client disconnected
         if let Some(client_connection) = self.client_connections.get_mut(client_token) {
-            let (buffer, send_buffer, stream, _interest) = client_connection.get_all();
+            let (buffer, send_buffer) = client_connection.get_rcv_and_send_buffer();
             loop {
                 match deserializer(buffer) {
                     Ok((value, new_cursor)) => {
@@ -290,15 +288,21 @@ impl Server {
                             "Error deserializing input from client {:?}: {:?}",
                             client_token, e
                         );
-                        if let Err(e) = poll.registry().deregister(stream) {
-                            eprintln!("Error deregistering client {:?}: {:?}", client_token, e);
-                        }
-                        self.client_connections.remove(client_token);
+                        self.disconnect_client_helper(poll, client_token);
                         return;
                     }
                 }
             }
         }
+    }
+
+    fn disconnect_client_helper(&mut self, poll: &mut Poll, client_token: &Token) {
+        if let Some(mut client_connection) = self.client_connections.remove(client_token) {
+            let stream = client_connection.get_tcp_stream_mut();
+            if let Err(e) = poll.registry().deregister(stream) {
+                eprintln!("Error deregistering client {:?}: {:?}", client_token, e);
+            }
+        } // 
     }
 
     pub fn commence_connection(&mut self) -> Result<(), CustomErrorResponse> {
