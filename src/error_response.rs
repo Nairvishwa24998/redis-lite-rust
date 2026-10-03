@@ -2,35 +2,34 @@ use std::io::Error;
 
 #[derive(Debug, PartialEq)]
 pub enum RespErrorResponse {
+    // Buffer doesn't yet hold a complete value — wait for more bytes, don't drop the connection.
+    Incomplete,
+    // leads to client disconnect
     IncorrectTypeError,
     UtfError,
-    // Buffer doesn't yet hold a complete value — wait for more bytes, don't drop the connection.
-    // Replaces the old EmptyInput/MissingCRLF/GenericError, which all fired on exactly this
-    // ambiguous condition (see progress.md, 2026-08-09 "OPEN QUESTION" entry).
-    Incomplete,
     AttributeMismatchError,
     InvalidRESPType,
-    InvalidRESPCommand,
-    InvalidCommandArguments,
     BulkStringTooLarge,
+    // Doesn't disconnect and used for specific errors
+    InvalidRESPCommand(String)
 }
 
 #[derive(Debug, PartialEq)]
-pub enum CustomErrorType {
+pub enum ServerErrorType {
     IncorrectPortNumber,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct CustomErrorResponse {
-    error_type: CustomErrorType,
+pub struct ServerError {
+    error_type: ServerErrorType,
     message: String,
 }
 
-// Needed to map the error from default Error to our CustomErrorResponse
-impl From<Error> for CustomErrorResponse {
+// Needed to map the error from default Error to our ServerError
+impl From<Error> for ServerError {
     fn from(err: Error) -> Self {
-        CustomErrorResponse {
-            error_type: CustomErrorType::IncorrectPortNumber,
+        ServerError {
+            error_type: ServerErrorType::IncorrectPortNumber,
             message: err.to_string(),
         }
     }

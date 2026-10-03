@@ -4,6 +4,7 @@ use core::error;
 use mio::net::TcpStream;
 use mio::{Events, Interest, Poll, Token};
 use std::collections::HashMap;
+use std::io::ErrorKind::Interrupted;
 use std::io::ErrorKind::WouldBlock;
 use std::io::Read;
 use std::io::Write;
@@ -20,10 +21,11 @@ use crate::constants::{BUFFER_PER_POLL_CALL, DEFAULT_BUFFER_SIZE, SERVER_TOKEN};
 use crate::deserializer::deserializer;
 use crate::error_response::RespErrorResponse;
 use crate::message_processing::command_handler;
+use crate::message_processing::map_error_to_resp_object;
 use crate::serializer::serializer;
 use crate::{
     constants::{REDIS_DEFAULT_PORT, REDIS_DEFAULT_URL},
-    error_response::CustomErrorResponse,
+    error_response::ServerError,
     store::Store,
 };
 
@@ -39,10 +41,10 @@ pub struct Server {
 }
 
 // We are gonna assume the server is always gonna run on one the default Redis port 6379 and default url
-// Two layers of error propagation. First layer is the default Error from TcpListener::bind, which we convert to our CustomErrorResponse using the From trait. Second layer is the Result type that we return from the setup function, which can be either Ok(Server) or Err(CustomErrorResponse).
+// Two layers of error propagation. First layer is the default Error from TcpListener::bind, which we convert to our ServerError using the From trait. Second layer is the Result type that we return from the setup function, which can be either Ok(Server) or Err(ServerError).
 // Second layer is of the result propagated upwards
 impl Server {
-    pub fn setup_server_instance() -> Result<Self, CustomErrorResponse> {
+    pub fn setup_server_instance() -> Result<Self, ServerError> {
         Ok(Self {
             port: REDIS_DEFAULT_PORT,
             store: Store::new(),
@@ -59,7 +61,7 @@ impl Server {
         // dont forget to make stream mutable
         mut stream: TcpStream,
         interest: Interest,
-    ) -> Result<(), CustomErrorResponse> {
+    ) -> Result<(), ServerError> {
         poll.registry()
             .register(&mut stream, Token(self.token_counter as usize), interest)?;
         self.client_connections.insert(
@@ -70,10 +72,7 @@ impl Server {
         Ok(())
     }
 
-    fn register_listening_socket_with_poll(
-        &mut self,
-        poll: &mut Poll,
-    ) -> Result<(), CustomErrorResponse> {
+    fn register_listening_socket_with_poll(&mut self, poll: &mut Poll) -> Result<(), ServerError> {
         poll.registry().register(
             &mut self.listening_socket,
             Token(SERVER_TOKEN),
@@ -88,7 +87,7 @@ impl Server {
             // Listening socket accepts whereas client socket read and write
             // mio sets to non blocking by default so we don't need to set separately
             match self.listening_socket.accept() {
-                Ok((mut stream, addr)) => {
+                Ok((stream, addr)) => {
                     // Handle the new client connection, e.g., register it with the poll instance
                     println!("New client connected: {}", addr);
                     // we don't default register for both readable and writable coz
@@ -104,6 +103,11 @@ impl Server {
                 Err(ref e) if e.kind() == WouldBlock => {
                     // No more connections to accept
                     break;
+                }
+                // Redis usually retries if interrupted
+                Err(e) if e.kind() == Interrupted => {
+                    // we try again coz got interrupted
+                    continue;
                 }
                 // Some other kind of error has happened, so we should log it and move forward, so one client connection failure doesn't derail all the others
                 Err(e) => {
@@ -156,6 +160,11 @@ impl Server {
                         // would block if not for non blocking mode due to no data to read at the momennt
                         // so break but don't deregister
                         break;
+                    }
+                    // Redis usually retries if interrupted
+                    Err(e) if e.kind() == Interrupted => {
+                        // we try again coz got interrupted
+                        continue;
                     }
                     // Any other kind of error
                     Err(e) => {
@@ -244,6 +253,11 @@ impl Server {
                         }
                         break;
                     }
+                    // Redis usually retries if interrupted
+                    Err(e) if e.kind() == Interrupted => {
+                        // we try again coz got interrupted
+                        continue;
+                    }
                     Err(e) => {
                         eprintln!("Error writing to client {:?}: {:?}", client_token, e);
                         self.disconnect_client_helper(poll, client_token);
@@ -275,6 +289,9 @@ impl Server {
                             }
                             Err(e) => {
                                 eprintln!("Error processing command: {:?}", e);
+                                // we serialize the error response, add it to send buffer
+                                let error_response = map_error_to_resp_object(&e);
+                                serializer(&error_response, send_buffer);
                             }
                         }
                     }
@@ -283,6 +300,7 @@ impl Server {
                         // Incomplete data, wait for more data to arrive
                         break;
                     }
+                    // Every other error we logged in deserializer leads to disconnecting the client
                     Err(e) => {
                         eprintln!(
                             "Error deserializing input from client {:?}: {:?}",
@@ -305,7 +323,7 @@ impl Server {
         } // 
     }
 
-    pub fn commence_connection(&mut self) -> Result<(), CustomErrorResponse> {
+    pub fn commence_connection(&mut self) -> Result<(), ServerError> {
         let mut events = Events::with_capacity(BUFFER_PER_POLL_CALL);
         // Construct a new `Poll` handle as well as the `Events` we'll store into
         let mut poll = Poll::new()?;

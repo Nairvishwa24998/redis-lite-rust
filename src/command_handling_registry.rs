@@ -6,7 +6,9 @@ use crate::{constants::PONG_COMMAND, error_response::RespErrorResponse, resp::Re
 pub fn ping_handler(deserialized_commands: &[RespValue]) -> Result<RespValue, RespErrorResponse> {
     let command_len = deserialized_commands.len();
     if command_len > 2 {
-        return Err(RespErrorResponse::InvalidCommandArguments);
+        return Err(RespErrorResponse::InvalidRESPCommand(
+            "PING command can have at most one argument".to_string(),
+        ));
     }
     // return just PONG as simple string
     if command_len == 1 {
@@ -18,7 +20,9 @@ pub fn ping_handler(deserialized_commands: &[RespValue]) -> Result<RespValue, Re
         return Ok(RespValue::BulkString(bytes.clone()));
     }
 
-    Err(RespErrorResponse::InvalidCommandArguments)
+    Err(RespErrorResponse::InvalidRESPCommand(
+        "Invalid PING command format".to_string(),
+    ))
 }
 
 pub fn echo_handler() -> RespValue {

@@ -6,8 +6,7 @@ use crate::constants::{
 };
 use crate::resp::RespValue;
 
-// We don't split or freeze here coz it would cause issues recursively in the case of arrays
-// Instead we can freeze at the point where the serializer is called
+
 pub fn serializer(data: &RespValue, target_buf: &mut BytesMut) {
     match data {
         // Could be a null bulkstring or null array. Setting to former for convenience
