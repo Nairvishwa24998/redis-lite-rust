@@ -17,6 +17,7 @@ use mio::net::TcpListener;
 
 use crate::client_connection::client_connection;
 use crate::constants::MAX_BUFFER_SIZE;
+use crate::constants::MAX_SEND_BUFFER_SIZE;
 use crate::constants::{BUFFER_PER_POLL_CALL, DEFAULT_BUFFER_SIZE, SERVER_TOKEN};
 use crate::deserializer::deserializer;
 use crate::error_response::RespErrorResponse;
@@ -293,6 +294,16 @@ impl Server {
                                 let error_response = map_error_to_resp_object(&e);
                                 serializer(&error_response, send_buffer);
                             }
+                        }
+                        // Send buffer grows potetntially when serializer si called so we need to check for happy case followed
+                        // by serialization as well error followed by serialization. So placed outside the match block
+                        if send_buffer.len() > MAX_SEND_BUFFER_SIZE {
+                            eprintln!(
+                                "Client {:?} caused maximum send buffer size to exceed. Disconnecting.",
+                                client_token
+                            );
+                            self.disconnect_client_helper(poll, client_token);
+                            return;
                         }
                     }
                     // If its incomplete we break the loop coz possibly more to come

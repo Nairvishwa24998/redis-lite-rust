@@ -19,6 +19,7 @@ pub const DEFAULT_BUFFER_SIZE: usize = 1024 * 4; // 4KB
 // Enforced ceiling — meant to be checked after each read append, closing the connection if
 // exceeded. Not used as an initial allocation size (that's DEFAULT_BUFFER_SIZE above).
 pub const MAX_BUFFER_SIZE: usize = 1024 * 1024 * 1024; // 1GB
+pub const MAX_SEND_BUFFER_SIZE: usize = 1024 * 1024 * 1024; // 1GB
 pub const REDIS_DEFAULT_PORT: u16 = 6379;
 pub const REDIS_DEFAULT_URL: &str = "127.0.0.1:6379";
 pub const BUFFER_PER_POLL_CALL: usize = 1024;
