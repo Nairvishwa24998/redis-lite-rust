@@ -282,7 +282,9 @@ impl Server {
                     Ok((value, new_cursor)) => {
                         // to move the cursor and prevent desrializing the same chunk again and again
                         buffer.advance(new_cursor);
-                        match command_handler(&value) {
+                        // No double mutable borrow issue for self.store coz we are only mutably borrowing the attribute not the
+                        // whole self. If that had been the case borrow checker would have flagged it as double mutable borrow.
+                        match command_handler(&value, &mut self.store) {
                             // command execution branch
                             Ok(response) => {
                                 // we serialize the response, add it to send buffer

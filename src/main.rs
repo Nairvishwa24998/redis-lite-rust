@@ -8,6 +8,7 @@ mod server;
 mod store;
 mod command_handling_registry;
 mod client_connection;
+mod utils;
 
 use server::Server;
 

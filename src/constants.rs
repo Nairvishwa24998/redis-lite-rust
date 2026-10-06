@@ -25,6 +25,9 @@ pub const REDIS_DEFAULT_URL: &str = "127.0.0.1:6379";
 pub const BUFFER_PER_POLL_CALL: usize = 1024;
 pub const SERVER_TOKEN: usize = 0;
 
+
+pub const PING_COMMAND_MAX_LENGTH: usize = 1;
+
 pub const PING_COMMAND: &[u8] = b"PING";
 pub const PONG_COMMAND: &[u8] = b"PONG";
 pub const ECHO_COMMAND: &[u8] = b"ECHO";

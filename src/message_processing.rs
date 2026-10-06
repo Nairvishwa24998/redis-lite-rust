@@ -1,15 +1,19 @@
 use bytes::Bytes;
 
 use crate::{
-    command_handling_registry::{echo_handler, ping_handler},
+    command_handling_registry::{
+        echo_handler, exists_handler, get_handler, ping_handler, set_handler,
+    },
     constants::{ECHO_COMMAND, EXISTS_COMMAND, GET_COMMAND, PING_COMMAND, SET_COMMAND},
     error_response::RespErrorResponse,
     resp::RespValue,
+    store::Store,
 };
 
 // Will take in the Deserialized RESP command and return appropriate response
 pub fn command_handler(
     deserialized_commands_object: &RespValue,
+    store: &mut Store,
 ) -> Result<RespValue, RespErrorResponse> {
     // Will always receive an array of BulkStrings according to official RESP documentation, so we should extract the array out of it
     if let RespValue::Array(deserialized_commands) = deserialized_commands_object {
@@ -23,9 +27,9 @@ pub fn command_handler(
                 match command.as_ref() {
                     ECHO_COMMAND => Ok(echo_handler()),
                     PING_COMMAND => ping_handler(deserialized_commands),
-                    SET_COMMAND => Ok(set_handler()),
-                    GET_COMMAND => Ok(get_handler()),
-                    EXISTS_COMMAND => Ok(exists_handler()), // Placeholder for EXISTS command
+                    SET_COMMAND => set_handler(deserialized_commands, store),
+                    GET_COMMAND => get_handler(deserialized_commands, store),
+                    EXISTS_COMMAND => exists_handler(deserialized_commands, store), // Placeholder for EXISTS command
                     _ => Err(RespErrorResponse::InvalidRESPCommand(format!(
                         "Unknown command: {}",
                         // command is already a reference so no needfor extra reference
@@ -46,17 +50,6 @@ pub fn command_handler(
     }
 }
 
-fn set_handler() -> RespValue {
-    RespValue::SimpleString(Bytes::from_static(b"OK"))
-}
-
-fn get_handler() -> RespValue {
-    RespValue::BulkString(Bytes::from_static(b"Hello, World!"))
-}
-
-fn exists_handler() -> RespValue {
-    RespValue::BulkString(Bytes::from_static(b"Hello, World!"))
-}
 fn del_handler() -> RespValue {
     RespValue::BulkString(Bytes::from_static(b"Hello, World!"))
 }
