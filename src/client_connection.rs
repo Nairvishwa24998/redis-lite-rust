@@ -8,6 +8,8 @@ pub struct client_connection {
     rec_buffer: BytesMut,
     send_buffer: BytesMut,
     interest: Interest,
+    // Set on a protocol error. Stop parsing, flush what's queued (incl. the error reply), then close
+    close_after_flush: bool,
 }
 
 impl client_connection {
@@ -21,6 +23,7 @@ impl client_connection {
             rec_buffer: BytesMut::with_capacity(DEFAULT_BUFFER_SIZE),
             send_buffer: BytesMut::with_capacity(DEFAULT_BUFFER_SIZE),
             interest: interest,
+            close_after_flush: false,
         }
     }
 
@@ -54,6 +57,14 @@ impl client_connection {
 
     pub fn set_interest(&mut self, interest: Interest) {
         self.interest = interest;
+    }
+
+    pub fn get_close_after_flush(&self) -> bool {
+        self.close_after_flush
+    }
+
+    pub fn set_close_after_flush(&mut self, close_after_flush: bool) {
+        self.close_after_flush = close_after_flush;
     }
 
     // just to prevent borrow checker issues when we need both of them at the same time

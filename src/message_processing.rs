@@ -67,11 +67,24 @@ fn l_push_handler() -> RespValue {
 }
 
 pub fn map_error_to_resp_object(error_response: &RespErrorResponse) -> RespValue {
-    if let RespErrorResponse::InvalidRESPCommand(error_message) = error_response {
-        RespValue::Error(Bytes::from(
+    match error_response {
+        RespErrorResponse::InvalidRESPCommand(error_message) => RespValue::Error(Bytes::from(
             format!("ERR {}", error_message).replace(['\r', '\n'], " "),
-        ))
-    } else {
-        RespValue::Error(Bytes::from_static(b"ERR Unknown error"))
+        )),
+        // Deserializer errors. Connection gets closed after this reply is flushed
+        RespErrorResponse::IncorrectTypeError | RespErrorResponse::UtfError => RespValue::Error(
+            Bytes::from_static(b"ERR Protocol error: invalid length or integer"),
+        ),
+        RespErrorResponse::BulkStringTooLarge => {
+            RespValue::Error(Bytes::from_static(b"ERR Protocol error: invalid bulk length"))
+        }
+        RespErrorResponse::AttributeMismatchError => RespValue::Error(Bytes::from_static(
+            b"ERR Protocol error: bulk length does not match data",
+        )),
+        RespErrorResponse::InvalidRESPType => {
+            RespValue::Error(Bytes::from_static(b"ERR Protocol error: invalid type byte"))
+        }
+        // Never reaches here, Incomplete means wait for more bytes
+        RespErrorResponse::Incomplete => RespValue::Error(Bytes::from_static(b"ERR Unknown error")),
     }
 }

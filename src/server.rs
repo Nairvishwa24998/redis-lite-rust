@@ -191,12 +191,20 @@ impl Server {
     fn flush_send_buffer(&mut self, poll: &mut Poll, client_token: &Token) {
         // Calling again to avoid rust ownership issues and Coz we don't want to call if client disconnected
         if let Some(client_connection) = self.client_connections.get_mut(client_token) {
+            // bool is Copy, so reading it before get_all() doesn't hold a borrow
+            let close_after_flush = client_connection.get_close_after_flush();
             let (_recv_buffer, send_buffer, stream, interest) = client_connection.get_all();
             loop {
                 // write path can also return ok(0) if buffer is genuinely empty
                 // in which case we can just break the loop so we don't have to check below
                 // in stream.write()
                 if send_buffer.is_empty() {
+                    // Everything queued (incl. the protocol error reply) has been sent, so close now.
+                    // Same as Redis's CLIENT_CLOSE_AFTER_REPLY check in writeToClient
+                    if close_after_flush {
+                        self.disconnect_client_helper(poll, client_token);
+                        return;
+                    }
                     // if send buffer is empty then we don't need interest in writable
                     // so reregistering purely as readable after checking to avoid unncessary sys calls
                     if interest.is_writable() {
@@ -276,6 +284,12 @@ impl Server {
     ) {
         // Calling again to avoid rust ownership issues and Coz we don't want to call if client disconnected
         if let Some(client_connection) = self.client_connections.get_mut(client_token) {
+            // Already hit a protocol error, so leftover bytes are never parsed again. Same as Redis's
+            // CLIENT_CLOSE_AFTER_REPLY check in processInputBuffer
+            if client_connection.get_close_after_flush() {
+                return;
+            }
+            let mut protocol_error = false;
             let (buffer, send_buffer) = client_connection.get_rcv_and_send_buffer();
             loop {
                 match deserializer(buffer) {
@@ -313,16 +327,22 @@ impl Server {
                         // Incomplete data, wait for more data to arrive
                         break;
                     }
-                    // Every other error we logged in deserializer leads to disconnecting the client
+                    // Malformed input. Queue a protocol error reply and stop parsing, the connection
+                    // is closed by flush_send_buffer once everything queued has been sent
                     Err(e) => {
                         eprintln!(
                             "Error deserializing input from client {:?}: {:?}",
                             client_token, e
                         );
-                        self.disconnect_client_helper(poll, client_token);
-                        return;
+                        serializer(&map_error_to_resp_object(&e), send_buffer);
+                        protocol_error = true;
+                        break;
                     }
                 }
+            }
+            // buffer and send_buffer aren't used after the loop, so their borrow has ended here
+            if protocol_error {
+                client_connection.set_close_after_flush(true);
             }
         }
     }
