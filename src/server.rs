@@ -132,6 +132,7 @@ impl Server {
                 // Read data from the client socket into the buffer
                 match stream.read(&mut temp_buffer) {
                     // reached EOF or client closed connection
+                    // HALF CLOSE case. We look later. For now no CLOSE AFTER DRAIN
                     Ok(0) => {
                         println!("Client disconnected: {:?}", client_token);
                         self.disconnect_client_helper(poll, client_token);
@@ -140,6 +141,7 @@ impl Server {
                     }
                     // Successfully read n bytes
                     Ok(n) => {
+                        // NO CLOSE AFTER DRAIN coz client sending too many bytes
                         if n + recv_buffer.len() > MAX_BUFFER_SIZE {
                             eprintln!(
                                 "Client {:?} exceeded maximum buffer size. Disconnecting.",
@@ -168,6 +170,7 @@ impl Server {
                         continue;
                     }
                     // Any other kind of error
+                    // Some kind of network error. NO CLOSE AFTER DRAIN coz not possible to write
                     Err(e) => {
                         eprintln!("Error reading from client {:?}: {:?}", client_token, e);
                         self.disconnect_client_helper(poll, client_token);
@@ -185,6 +188,78 @@ impl Server {
 
     fn manage_client_socket_writable_events(&mut self, poll: &mut Poll, client_token: &Token) {
         self.flush_send_buffer(poll, client_token);
+    }
+
+    fn manage_deserializer_invocation_and_message_processing(
+        &mut self,
+        poll: &mut Poll,
+        client_token: &Token,
+    ) {
+        // Calling again to avoid rust ownership issues and Coz we don't want to call if client disconnected
+        if let Some(client_connection) = self.client_connections.get_mut(client_token) {
+            // Already hit a protocol error, so leftover bytes are never parsed again. Same as Redis's
+            // CLIENT_CLOSE_AFTER_REPLY check in processInputBuffer
+            if client_connection.get_close_after_flush() {
+                return;
+            }
+            let mut protocol_error = false;
+            let (buffer, send_buffer) = client_connection.get_rcv_and_send_buffer();
+            loop {
+                match deserializer(buffer) {
+                    Ok((value, new_cursor)) => {
+                        // to move the cursor and prevent desrializing the same chunk again and again
+                        buffer.advance(new_cursor);
+                        // No double mutable borrow issue for self.store coz we are only mutably borrowing the attribute not the
+                        // whole self. If that had been the case borrow checker would have flagged it as double mutable borrow.
+                        match command_handler(&value, &mut self.store) {
+                            // command execution branch
+                            Ok(response) => {
+                                // we serialize the response, add it to send buffer
+                                serializer(&response, send_buffer);
+                            }
+                            Err(e) => {
+                                eprintln!("Error processing command: {:?}", e);
+                                // we serialize the error response, add it to send buffer
+                                let error_response = map_error_to_resp_object(&e);
+                                serializer(&error_response, send_buffer);
+                            }
+                        }
+                        // Send buffer grows potetntially when serializer si called so we need to check for happy case followed
+                        // by serialization as well error followed by serialization. So placed outside the match block
+                        // NO CLOSE AFTER DRAIN
+                        if send_buffer.len() > MAX_SEND_BUFFER_SIZE {
+                            eprintln!(
+                                "Client {:?} caused maximum send buffer size to exceed. Disconnecting.",
+                                client_token
+                            );
+                            self.disconnect_client_helper(poll, client_token);
+                            return;
+                        }
+                    }
+                    // If its incomplete we break the loop coz possibly more to come
+                    Err(RespErrorResponse::Incomplete) => {
+                        // Incomplete data, wait for more data to arrive
+                        break;
+                    }
+                    // Malformed input. Queue a protocol error reply and stop parsing, the connection
+                    // is closed by flush_send_buffer once everything queued has been sent
+                    // CLOSE AFTER DRAIN
+                    Err(e) => {
+                        eprintln!(
+                            "Error deserializing input from client {:?}: {:?}",
+                            client_token, e
+                        );
+                        serializer(&map_error_to_resp_object(&e), send_buffer);
+                        protocol_error = true;
+                        break;
+                    }
+                }
+            }
+            // buffer and send_buffer aren't used after the loop, so their borrow has ended here
+            if protocol_error {
+                client_connection.set_close_after_flush(true);
+            }
+        }
     }
 
     // renaming it so can be invoked once within read as well without messing up responsibility segregation
@@ -228,6 +303,7 @@ impl Server {
                     // two cases - complete write or partial writes
                     Ok(n) => {
                         // write returning 0 means write attempt failed
+                        // NO CLOSE AFTER DRAIN coz not possible if client doesnt let us write
                         if n == 0 {
                             self.disconnect_client_helper(poll, client_token);
                             // deregister failure is not dangerous.
@@ -267,82 +343,13 @@ impl Server {
                         // we try again coz got interrupted
                         continue;
                     }
+                    // No CLOSE AFTER DRAIN coz not possible to write if client doesn't let us write only
                     Err(e) => {
                         eprintln!("Error writing to client {:?}: {:?}", client_token, e);
                         self.disconnect_client_helper(poll, client_token);
                         return;
                     }
                 }
-            }
-        }
-    }
-
-    fn manage_deserializer_invocation_and_message_processing(
-        &mut self,
-        poll: &mut Poll,
-        client_token: &Token,
-    ) {
-        // Calling again to avoid rust ownership issues and Coz we don't want to call if client disconnected
-        if let Some(client_connection) = self.client_connections.get_mut(client_token) {
-            // Already hit a protocol error, so leftover bytes are never parsed again. Same as Redis's
-            // CLIENT_CLOSE_AFTER_REPLY check in processInputBuffer
-            if client_connection.get_close_after_flush() {
-                return;
-            }
-            let mut protocol_error = false;
-            let (buffer, send_buffer) = client_connection.get_rcv_and_send_buffer();
-            loop {
-                match deserializer(buffer) {
-                    Ok((value, new_cursor)) => {
-                        // to move the cursor and prevent desrializing the same chunk again and again
-                        buffer.advance(new_cursor);
-                        // No double mutable borrow issue for self.store coz we are only mutably borrowing the attribute not the
-                        // whole self. If that had been the case borrow checker would have flagged it as double mutable borrow.
-                        match command_handler(&value, &mut self.store) {
-                            // command execution branch
-                            Ok(response) => {
-                                // we serialize the response, add it to send buffer
-                                serializer(&response, send_buffer);
-                            }
-                            Err(e) => {
-                                eprintln!("Error processing command: {:?}", e);
-                                // we serialize the error response, add it to send buffer
-                                let error_response = map_error_to_resp_object(&e);
-                                serializer(&error_response, send_buffer);
-                            }
-                        }
-                        // Send buffer grows potetntially when serializer si called so we need to check for happy case followed
-                        // by serialization as well error followed by serialization. So placed outside the match block
-                        if send_buffer.len() > MAX_SEND_BUFFER_SIZE {
-                            eprintln!(
-                                "Client {:?} caused maximum send buffer size to exceed. Disconnecting.",
-                                client_token
-                            );
-                            self.disconnect_client_helper(poll, client_token);
-                            return;
-                        }
-                    }
-                    // If its incomplete we break the loop coz possibly more to come
-                    Err(RespErrorResponse::Incomplete) => {
-                        // Incomplete data, wait for more data to arrive
-                        break;
-                    }
-                    // Malformed input. Queue a protocol error reply and stop parsing, the connection
-                    // is closed by flush_send_buffer once everything queued has been sent
-                    Err(e) => {
-                        eprintln!(
-                            "Error deserializing input from client {:?}: {:?}",
-                            client_token, e
-                        );
-                        serializer(&map_error_to_resp_object(&e), send_buffer);
-                        protocol_error = true;
-                        break;
-                    }
-                }
-            }
-            // buffer and send_buffer aren't used after the loop, so their borrow has ended here
-            if protocol_error {
-                client_connection.set_close_after_flush(true);
             }
         }
     }

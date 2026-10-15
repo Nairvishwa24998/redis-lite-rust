@@ -1,3 +1,5 @@
+mod client_connection;
+mod command_handling_registry;
 mod constants;
 mod deserializer;
 mod error_response;
@@ -5,10 +7,10 @@ mod message_processing;
 mod resp;
 mod serializer;
 mod server;
+mod set_command_handling_registry;
 mod store;
-mod command_handling_registry;
-mod client_connection;
 mod utils;
+mod set_manager;
 
 use server::Server;
 
